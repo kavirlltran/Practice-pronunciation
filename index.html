@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Speech Comparison App</title>
+  <style>
+    /* Basic Reset */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Roboto', sans-serif;
+      /* Set background image with cover and fixed effect */
+      background: url("https://i.imgur.com/CjMGoI4.jpg") no-repeat center center fixed;
+      background-size: cover;
+      color: #ffffff;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+    }
+    .instruction {
+      margin-bottom: 20px;
+      font-style: italic;
+      text-align: center;
+    }
+    .text-lines {
+      margin-bottom: 20px;
+    }
+    .text-line {
+      padding: 10px;
+      margin-bottom: 5px;
+      border: 1px solid #555;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.3s, transform 0.3s;
+    }
+    .text-line:hover {
+      background: rgba(255, 255, 255, 0.1);
+      transform: scale(1.02);
+    }
+    /* Highlight the selected text line more prominently */
+    .selected {
+      background: rgba(0, 150, 136, 0.8);
+      border: 2px solid #00ffcc;
+      box-shadow: 0 0 10px 2px #00ffcc;
+      transform: scale(1.05);
+    }
+    .controls {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    button {
+      background: #009688;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      margin: 5px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background 0.3s;
+    }
+    button:hover {
+      background: #00796b;
+    }
+    .result {
+      font-size: 18px;
+      line-height: 1.6;
+      margin-top: 20px;
+      text-align: center;
+    }
+    /* Highlighting for mis-read words */
+    .minor {
+      background-color: yellow;
+      color: black;
+    }
+    .error {
+      background-color: red;
+      color: white;
+    }
+    /* Emphasis for accented parts */
+    .accent {
+      font-weight: bold;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Speech Comparison App</h1>
+    <div class="instruction">
+      Select one text line below, then press the "Start Recording" button to read and compare.
+    </div>
+    <!-- Text Lines -->
+    <div class="text-lines" id="text-lines"></div>
+    <div class="controls">
+      <button id="startBtn" disabled>Start Recording</button>
+      <button id="stopBtn" disabled>Stop Recording</button>
+    </div>
+    <!-- Comparison Result -->
+    <div class="result" id="result"></div>
+  </div>
+  
+  <script>
+    /***** Text Data *****/
+    const texts = [
+      "We should ‘finish the ‘project for our ‘history 'class",
+      "‘Peter is re‘vising for his e‘xam ‘next ‘week",
+      "‘Students will ‘spend more ‘time ‘working with ‘other ‘classmates",
+      "I ‘like to ‘watch ‘videos that ‘help me ‘learn ‘new ‘things",
+      "I have ‘installed some ‘apps on my ‘phone"
+    ];
+    
+    const textLinesContainer = document.getElementById("text-lines");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const resultDiv = document.getElementById("result");
+    
+    let selectedText = null;
+    let recognition = null;
+    let recognizing = false;
+    
+    /***** Render text lines with accent processing *****/
+    function renderTextLines() {
+      texts.forEach((line, index) => {
+        const div = document.createElement("div");
+        div.classList.add("text-line");
+        div.dataset.index = index;
+        // processAccent replaces markers with a span for emphasis
+        div.innerHTML = processAccent(line);
+        div.addEventListener("click", () => {
+          document
+            .querySelectorAll(".text-line")
+            .forEach((el) => el.classList.remove("selected"));
+          div.classList.add("selected");
+          selectedText = line;
+          startBtn.disabled = false;
+          resultDiv.innerHTML = "";
+        });
+        textLinesContainer.appendChild(div);
+      });
+    }
+    
+    /* Process accented text:
+       Replaces any ' or ‘ preceding letters with a span having the "accent" class.
+       E.g., “‘finish” → <span class="accent">finish</span>  */
+    function processAccent(text) {
+      return text.replace(/['‘]([A-Za-z]+)/g, "<span class='accent'>$1</span>");
+    }
+    
+    /***** Levenshtein Distance Calculation *****/
+    function levenshtein(a, b) {
+      a = a.toLowerCase();
+      b = b.toLowerCase();
+      const matrix = [];
+      for (let i = 0; i <= b.length; i++) {
+        matrix[i] = [i];
+      }
+      for (let j = 0; j <= a.length; j++) {
+        matrix[0][j] = j;
+      }
+      for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+          if (b.charAt(i - 1) === a.charAt(j - 1)) {
+            matrix[i][j] = matrix[i - 1][j - 1];
+          } else {
+            matrix[i][j] = Math.min(
+              matrix[i - 1][j - 1] + 1, // substitution
+              matrix[i][j - 1] + 1,     // insertion
+              matrix[i - 1][j] + 1      // deletion
+            );
+          }
+        }
+      }
+      return matrix[b.length][a.length];
+    }
+    
+    /***** Compare the expected and actual text word-by-word *****/
+    function compareTexts(expected, actual) {
+      const expectedWords = expected.split(" ");
+      const actualWords = actual.split(" ");
+      const comparisons = [];
+      // Iterate through each word in the expected text
+      for (let i = 0; i < expectedWords.length; i++) {
+        const expectedWord = expectedWords[i];
+        // If there is no corresponding word in the transcript, mark as error
+        const actualWord = actualWords[i] || "";
+        if (expectedWord.toLowerCase() === actualWord.toLowerCase()) {
+          comparisons.push({ word: expectedWord, status: "correct" });
+        } else {
+          const dist = levenshtein(expectedWord, actualWord);
+          const ratio = dist / Math.max(expectedWord.length, actualWord.length);
+          // If the error ratio is high (> 0.5), highlight in red
+          // If the error ratio is low (> 0 but <= 0.5), highlight in yellow
+          if (ratio > 0.5) {
+            comparisons.push({ word: expectedWord, status: "error" });
+          } else if (ratio > 0) {
+            comparisons.push({ word: expectedWord, status: "minor" });
+          } else {
+            comparisons.push({ word: expectedWord, status: "correct" });
+          }
+        }
+      }
+      return comparisons;
+    }
+    
+    /***** Display the comparison results *****/
+    function displayResult(comparisons) {
+      const html = comparisons
+        .map((item) => {
+          if (item.status === "correct") return item.word;
+          else if (item.status === "minor")
+            return `<span class="minor">${item.word}</span>`;
+          else if (item.status === "error")
+            return `<span class="error">${item.word}</span>`;
+        })
+        .join(" ");
+      resultDiv.innerHTML = html;
+    }
+    
+    /***** Initialize Speech Recognition *****/
+    function initRecognition() {
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        alert("Your browser does not support Speech Recognition.");
+        return null;
+      }
+      const recog = new SpeechRecognition();
+      recog.lang = "en-US"; // Use English for recognition
+      recog.interimResults = false;
+      recog.maxAlternatives = 1;
+      return recog;
+    }
+    
+    recognition = initRecognition();
+    
+    if (recognition) {
+      recognition.addEventListener("start", () => {
+        recognizing = true;
+        console.log("Recording started...");
+      });
+      
+      recognition.addEventListener("result", (event) => {
+        const transcript = Array.from(event.results)
+          .map((result) => result[0])
+          .map((result) => result.transcript)
+          .join("");
+        console.log("Recognized text:", transcript);
+        if (selectedText) {
+          const comparisons = compareTexts(selectedText, transcript);
+          displayResult(comparisons);
+        }
+      });
+      
+      recognition.addEventListener("end", () => {
+        recognizing = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        console.log("Recording ended.");
+      });
+      
+      recognition.addEventListener("error", (event) => {
+        console.error("Error during speech recognition:", event.error);
+        recognizing = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      });
+    }
+    
+    /***** Event listeners for the Recording buttons *****/
+    startBtn.addEventListener("click", () => {
+      if (!selectedText) {
+        alert("Please select a text line to read.");
+        return;
+      }
+      if (recognition && !recognizing) {
+        resultDiv.innerHTML = "Recording... Please read the text.";
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        recognition.start();
+      }
+    });
+    
+    stopBtn.addEventListener("click", () => {
+      if (recognition && recognizing) {
+        recognition.stop();
+      }
+    });
+    
+    // Initial render of text lines
+    renderTextLines();
+  </script>
+</body>
+</html>
